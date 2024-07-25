@@ -10,15 +10,12 @@ import torch.optim as optim
 
 # Function to preprocess the data
 def preprocess_data(data):
-    def parse_datetime(row):
-        return datetime.strptime(row['5 Minutes'], '%m/%d/%Y %H:%M')
-
-    data['datetime'] = data.apply(parse_datetime, axis=1)
+    data['datetime'] = pd.to_datetime(data['5 Minutes'], format='%m/%d/%Y %H:%M')
     data['hour'] = data['datetime'].dt.hour
     data['day'] = data['datetime'].dt.dayofweek
     data['month'] = data['datetime'].dt.month
     data['minute'] = data['datetime'].dt.minute
-    data['timestamp'] = data['datetime'].astype(np.int64) // 10**9
+    data['timestamp'] = data['datetime'].astype('int64') // 10**9
 
     features = data[['hour', 'day', 'month', 'minute']].values
     target = data['Rate'].values
@@ -46,8 +43,8 @@ X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
 # Convert to PyTorch tensors
-X_train = torch.tensor(X_train, dtype=torch.float32)
-X_test = torch.tensor(X_test, dtype=torch.float32)
+X_train = torch.tensor(X_train, dtype=torch.float32).unsqueeze(1)  # Add an extra dimension for batch
+X_test = torch.tensor(X_test, dtype=torch.float32).unsqueeze(1)
 y_train = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)
 y_test = torch.tensor(y_test, dtype=torch.float32).view(-1, 1)
 
@@ -59,7 +56,7 @@ class TrafficRateNN(nn.Module):
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, output_size)
-    
+
     def forward(self, x):
         out = self.fc1(x)
         out = self.relu(out)
@@ -68,59 +65,119 @@ class TrafficRateNN(nn.Module):
         out = self.fc3(out)
         return out
 
-input_size = X_train.shape[1]
+# Define RNN model
+class RNNModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
+        super(RNNModel, self).__init__()
+        self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(num_layers, x.size(0), hidden_size)
+        out, _ = self.rnn(x, h0)
+        out = self.fc(out[:, -1, :])
+        return out
+
+# Define LSTM model
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
+        super(LSTMModel, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(num_layers, x.size(0), hidden_size)
+        c0 = torch.zeros(num_layers, x.size(0), hidden_size)
+        out, _ = self.lstm(x, (h0, c0))
+        out = self.fc(out[:, -1, :])
+        return out
+
+# Define GRU model
+class GRUModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
+        super(GRUModel, self).__init__()
+        self.gru = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(num_layers, x.size(0), hidden_size)
+        out, _ = self.gru(x, h0)
+        out = self.fc(out[:, -1, :])
+        return out
+
+input_size = X_train.shape[2]
 hidden_size = 64
 output_size = 1
+num_layers = 1
 
-model = TrafficRateNN(input_size, hidden_size, output_size)
+# Instantiate models
+ffnn_model = TrafficRateNN(input_size, hidden_size, output_size)
+rnn_model = RNNModel(input_size, hidden_size, output_size, num_layers)
+lstm_model = LSTMModel(input_size, hidden_size, output_size, num_layers)
+gru_model = GRUModel(input_size, hidden_size, output_size, num_layers)
 
-# Train the model
-criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+models = {
+    'FFNN': ffnn_model,
+    'RNN': rnn_model,
+    'LSTM': lstm_model,
+    'GRU': gru_model
+}
 
-num_epochs = 100
+# Training function
+def train_model(model, criterion, optimizer, X_train, y_train, num_epochs=100):
+    for epoch in range(num_epochs):
+        model.train()
+        outputs = model(X_train)
+        loss = criterion(outputs, y_train)
 
-for epoch in range(num_epochs):
-    model.train()
-    outputs = model(X_train)
-    loss = criterion(outputs, y_train)
-    
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    
-    if (epoch+1) % 10 == 0:
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-# Evaluate the model
+        if (epoch+1) % 10 == 0:
+            print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+# Function to calculate accuracy
 def calculate_accuracy(predictions, true_values, tolerance=0.1):
     accuracy = (torch.abs(predictions - true_values) / true_values) < tolerance
     return accuracy.float().mean()
 
-model.eval()
-with torch.no_grad():
-    predictions = model(X_test)
-    test_loss = criterion(predictions, y_test)
-    accuracy = calculate_accuracy(predictions, y_test)
-    print(f'Test Loss: {test_loss.item():.4f}')
-    print(f'Accuracy: {accuracy.item():.4f}')
+# Evaluate model
+def evaluate_model(model, criterion, X_test, y_test):
+    model.eval()
+    with torch.no_grad():
+        predictions = model(X_test)
+        test_loss = criterion(predictions, y_test)
+        accuracy = calculate_accuracy(predictions, y_test)
+        return test_loss.item(), accuracy.item()
+
+# Train and evaluate each model
+criterion = nn.MSELoss()
+results = {}
+
+for name, model in models.items():
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    print(f'Training {name}...')
+    train_model(model, criterion, optimizer, X_train, y_train)
+    test_loss, accuracy = evaluate_model(model, criterion, X_test, y_test)
+    results[name] = {'Test Loss': test_loss, 'Accuracy': accuracy}
+    print(f'{name} - Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.4f}')
 
 # Function to predict packet rate given a date and timestamp
-def predict_packet_rate(date_str):
+def predict_packet_rate(date_str, model):
     # Parse the input date string
     date_time = datetime.strptime(date_str, '%m/%d/%Y %H:%M')
     # Extract features
     hour = date_time.hour
-    day = date_time.day
+    day = date_time.weekday()
     month = date_time.month
     minute = date_time.minute
     # Create feature array
     features = np.array([[hour, day, month, minute]])
-    print(features)
     # Normalize features
     features = scaler.transform(features)
     # Convert to PyTorch tensor
-    features = torch.tensor(features, dtype=torch.float32)
+    features = torch.tensor(features, dtype=torch.float32).unsqueeze(1)  # Add an extra dimension for batch
     # Make prediction
     model.eval()
     with torch.no_grad():
@@ -129,5 +186,6 @@ def predict_packet_rate(date_str):
 
 # Example usage of the prediction function
 date_str = '04/01/2016 15:00'
-predicted_rate = predict_packet_rate(date_str)
-print(f'Predicted packet rate for {date_str}: {predicted_rate}')
+predicted_rate = predict_packet_rate(date_str, ffnn_model)
+print(f'Predicted packet rate for {date_str} using FFNN: {predicted_rate}')
+
