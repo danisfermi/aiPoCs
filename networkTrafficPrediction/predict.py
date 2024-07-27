@@ -45,8 +45,8 @@ X_test = scaler.transform(X_test)
 # Convert to PyTorch tensors
 X_train = torch.tensor(X_train, dtype=torch.float32).unsqueeze(1)  # Add an extra dimension for batch
 X_test = torch.tensor(X_test, dtype=torch.float32).unsqueeze(1)
-y_train = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)
-y_test = torch.tensor(y_test, dtype=torch.float32).view(-1, 1)
+y_train = torch.tensor(y_train, dtype=torch.float32).view(-1)
+y_test = torch.tensor(y_test, dtype=torch.float32).view(-1)
 
 # Define the neural network
 class TrafficRateNN(nn.Module):
@@ -73,6 +73,9 @@ class RNNModel(nn.Module):
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
+        # x (batch_size, seq_length, input_size)
+        # h0 (n_layers, batch_size, hidden_dim)
+        # out (batch_size, time_step, hidden_size)
         h0 = torch.zeros(num_layers, x.size(0), hidden_size)
         out, _ = self.rnn(x, h0)
         out = self.fc(out[:, -1, :])
@@ -86,6 +89,10 @@ class LSTMModel(nn.Module):
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
+        # x (batch_size, seq_length, input_size)
+        # h0 (n_layers, batch_size, hidden_dim)
+        # c0 (n_layers, batch_size, hidden_dim)
+        # out (batch_size, time_step, hidden_size)
         h0 = torch.zeros(num_layers, x.size(0), hidden_size)
         c0 = torch.zeros(num_layers, x.size(0), hidden_size)
         out, _ = self.lstm(x, (h0, c0))
@@ -100,6 +107,9 @@ class GRUModel(nn.Module):
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
+        # x (batch_size, seq_length, input_size)
+        # h0 (n_layers, batch_size, hidden_dim)
+        # out (batch_size, time_step, hidden_size)
         h0 = torch.zeros(num_layers, x.size(0), hidden_size)
         out, _ = self.gru(x, h0)
         out = self.fc(out[:, -1, :])
@@ -127,7 +137,7 @@ models = {
 def train_model(model, criterion, optimizer, X_train, y_train, num_epochs=100):
     for epoch in range(num_epochs):
         model.train()
-        outputs = model(X_train)
+        outputs = model(X_train).squeeze()  # Squeeze the output to match the target shape
         loss = criterion(outputs, y_train)
 
         optimizer.zero_grad()
@@ -146,7 +156,7 @@ def calculate_accuracy(predictions, true_values, tolerance=0.1):
 def evaluate_model(model, criterion, X_test, y_test):
     model.eval()
     with torch.no_grad():
-        predictions = model(X_test)
+        predictions = model(X_test).squeeze()  # Squeeze the output to match the target shape
         test_loss = criterion(predictions, y_test)
         accuracy = calculate_accuracy(predictions, y_test)
         return test_loss.item(), accuracy.item()
@@ -181,7 +191,7 @@ def predict_packet_rate(date_str, model):
     # Make prediction
     model.eval()
     with torch.no_grad():
-        prediction = model(features)
+        prediction = model(features).squeeze()  # Squeeze the output to get a scalar value
     return prediction.item()
 
 # Example usage of the prediction function

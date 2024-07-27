@@ -29,7 +29,7 @@ def generate_csv(timestamps, output_file):
     df.to_csv(output_file, index=False)
 
 # Example usage
-pcap_file = 'pcapfile.pcap'
+pcap_file = 'sample.pcap'
 output_csv = 'output_packet_rate_data.csv'
 
 timestamps = read_pcap(pcap_file)
