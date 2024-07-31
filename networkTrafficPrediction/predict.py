@@ -10,7 +10,7 @@ import torch.optim as optim
 
 # Function to preprocess the data
 def preprocess_data(data):
-    data['datetime'] = pd.to_datetime(data['5 Minutes'], format='%m/%d/%Y %H:%M')
+    data['datetime'] = pd.to_datetime(data['Second'], format='%m/%d/%Y %H:%M')
     data['hour'] = data['datetime'].dt.hour
     data['day'] = data['datetime'].dt.dayofweek
     data['month'] = data['datetime'].dt.month
@@ -115,9 +115,59 @@ class GRUModel(nn.Module):
         out = self.fc(out[:, -1, :])
         return out
 
+class PatchTSMixer(nn.Module):
+    def __init__(self, input_dim, seq_len, patch_size, hidden_dim, output_dim):
+        super(PatchTSMixer, self).__init__()
+        self.patch_size = patch_size
+        self.num_patches = seq_len // patch_size
+        assert seq_len % patch_size == 0, "Sequence length must be divisible by patch size"
+
+        self.patch_embedding = nn.Linear(patch_size * input_dim, hidden_dim)
+        self.mixer_layers = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        self.output_layer = nn.Linear(hidden_dim * self.num_patches, output_dim)
+
+    def forward(self, x):
+        batch_size, seq_len, input_dim = x.shape
+        x = x.view(batch_size, self.num_patches, -1)  # Reshape to (batch_size, num_patches, patch_size * input_dim)
+        x = self.patch_embedding(x)
+        x = self.mixer_layers(x)
+        x = x.view(batch_size, -1)  # Flatten the patches
+        output = self.output_layer(x)
+        return output
+
+# Define Autoformer model
+class Autoformer(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2, num_heads=2):
+        super(Autoformer, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=num_heads, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        self.fc = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.fc_out = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        x = self.transformer_encoder(x)
+        x = self.fc(x)
+        x = self.relu(x)
+        x = self.fc_out(x[:, -1, :])  # Use the last time step's output
+        return x
+
+# Instantiate PatchTSMixer model with correct parameters
+seq_len = X_train.shape[1]
 input_size = X_train.shape[2]
-hidden_size = 64
+hidden_size = 128
 output_size = 1
+patch_size = 1  # Define patch size
 num_layers = 1
 
 # Instantiate models
@@ -125,12 +175,16 @@ ffnn_model = TrafficRateNN(input_size, hidden_size, output_size)
 rnn_model = RNNModel(input_size, hidden_size, output_size, num_layers)
 lstm_model = LSTMModel(input_size, hidden_size, output_size, num_layers)
 gru_model = GRUModel(input_size, hidden_size, output_size, num_layers)
+patch_ts_mixed_model = PatchTSMixer(input_dim=input_size, seq_len=seq_len, patch_size=patch_size, hidden_dim=hidden_size, output_dim=output_size)
+autoformer_model = Autoformer(input_dim=input_size, hidden_dim=hidden_size, output_dim=output_size, num_layers=2, num_heads=2)
 
 models = {
     'FFNN': ffnn_model,
     'RNN': rnn_model,
     'LSTM': lstm_model,
-    'GRU': gru_model
+    'GRU': gru_model,
+    'PatchTSMixer': patch_ts_mixed_model,
+    'Autoformer': autoformer_model
 }
 
 # Training function
